@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>リンクで見るYouTube</title>
+<style>
+:root{
+  --bg:#f3f4f1; --surface:#ffffff; --ink:#1b1f1d; --sub:#5d6661; --line:#d9ddd8; --accent:#c8262d; --accent-ink:#ffffff; --stage:#0d0f0e;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#121413; --surface:#1b1e1c; --ink:#eceeea; --sub:#9aa39d; --line:#2e332f; --accent:#e5484d; --accent-ink:#ffffff; --stage:#000;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#121413; --surface:#1b1e1c; --ink:#eceeea; --sub:#9aa39d; --line:#2e332f; --accent:#e5484d; --accent-ink:#ffffff; --stage:#000;
+}
+html{height:100%;scroll-padding-top:env(safe-area-inset-top,0px)}
+*,*::before,*::after{box-sizing:border-box}
+body{margin:0;min-height:100%;background:var(--bg);color:var(--ink);font-family:"Noto Sans JP","Hiragino Sans","Yu Gothic",system-ui,sans-serif;line-height:1.6}
+main{max-width:920px;margin:0 auto;padding:28px 18px 56px}
+h1{font-size:1.5rem;margin:0 0 6px;letter-spacing:.01em}
+p.lead{margin:0 0 20px;color:var(--sub);font-size:.95rem}
+.bar{display:flex;gap:8px;flex-wrap:wrap}
+input[type=text]{flex:1 1 280px;min-width:0;padding:13px 14px;font:inherit;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:10px}
+input[type=text]:focus-visible,button:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+button{font:inherit;cursor:pointer;border-radius:10px;padding:13px 20px;border:1px solid var(--line);background:var(--surface);color:var(--ink)}
+button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:700}
+.msg{min-height:1.5em;margin:10px 0 0;font-size:.9rem;color:var(--accent)}
+.stage{margin-top:14px;background:var(--stage);border-radius:12px;overflow:hidden;aspect-ratio:16/9;display:grid;place-items:center}
+.stage iframe{width:100%;height:100%;border:0;display:block}
+.empty{color:#9aa39d;font-size:.95rem;padding:20px;text-align:center}
+.tools{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;align-items:center}
+.tools a{color:var(--sub);font-size:.9rem}
+h2{font-size:1.05rem;margin:32px 0 10px}
+ul.hist{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+ul.hist li{display:flex;gap:8px;align-items:center;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:6px 6px 6px 14px}
+ul.hist button.item{flex:1;text-align:left;border:0;background:none;padding:8px 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+ul.hist button.del{padding:8px 12px;color:var(--sub)}
+.note{color:var(--sub);font-size:.85rem;margin-top:24px}
+@media (prefers-reduced-motion: no-preference){ .stage iframe{animation:fade .25s ease} @keyframes fade{from{opacity:0}to{opacity:1}} }
+</style>
+</head>
+<body>
+<main>
+  <h1>リンクで見るYouTube</h1>
+  <p class="lead">YouTubeのリンクを貼ると、このページで再生できます。</p>
+
+  <div class="bar">
+    <input id="url" type="text" inputmode="url" autocomplete="off" placeholder="https://www.youtube.com/watch?v=… / youtu.be/… / shorts/…" aria-label="YouTubeのリンク">
+    <button id="play" class="primary" type="button">再生する</button>
+    <button id="paste" type="button">貼り付け</button>
+  </div>
+  <p id="msg" class="msg" role="alert"></p>
+
+  <div class="stage" id="stage"><div class="empty">ここに動画が表示されます</div></div>
+  <div class="tools" id="tools" hidden>
+    <a id="open" href="#" target="_blank" rel="noopener noreferrer">YouTubeで開く</a>
+  </div>
+
+  <h2>履歴</h2>
+  <ul class="hist" id="hist"></ul>
+  <p class="note">対応: 通常の動画、youtu.be、Shorts、ライブ、埋め込みリンク、再生リスト。動画IDだけでも再生できます。</p>
+</main>
+
+<script>
+(function(){
+  var $ = function(id){return document.getElementById(id)};
+  var input=$("url"), msg=$("msg"), stage=$("stage"), tools=$("tools"), openLink=$("open"), histEl=$("hist");
+  var KEY="yt_history_v1", hist=[];
+
+  function load(){ try{ var s=localStorage.getItem(KEY); hist=s?JSON.parse(s):[]; if(!Array.isArray(hist)) hist=[]; }catch(e){ hist=[]; } }
+  function save(){ try{ localStorage.setItem(KEY,JSON.stringify(hist.slice(0,15))); }catch(e){} }
+
+  var ID=/^[A-Za-z0-9_-]{11}$/;
+
+  function parse(raw){
+    raw=(raw||"").trim();
+    if(!raw) return null;
+    if(ID.test(raw)) return {type:"video",id:raw};
+    if(!/^https?:\/\//i.test(raw)) raw="https://"+raw;
+    var u;
+    try{ u=new URL(raw); }catch(e){ return null; }
+    var h=u.hostname.replace(/^www\.|^m\.|^music\./,"");
+    var start=0, t=u.searchParams.get("t")||u.searchParams.get("start");
+    if(t){
+      var m=t.match(/^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s?)?$/);
+      if(m) start=(+m[1]||0)*3600+(+m[2]||0)*60+(+m[3]||0);
+    }
+    var list=u.searchParams.get("list");
+    var id=null;
+    if(h==="youtu.be"){ id=u.pathname.split("/")[1]; }
+    else if(h==="youtube.com"||h==="youtube-nocookie.com"){
+      var p=u.pathname.split("/").filter(Boolean);
+      if(p[0]==="watch") id=u.searchParams.get("v");
+      else if(["shorts","embed","live","v"].indexOf(p[0])>-1) id=p[1];
+      else if(p[0]==="playlist" && list) return {type:"list",list:list};
+    } else return null;
+    if(id && ID.test(id)) return {type:"video",id:id,list:list,start:start};
+    if(list) return {type:"list",list:list};
+    return null;
+  }
+
+  function embedUrl(v){
+    var base="https://www.youtube-nocookie.com/embed/";
+    if(v.type==="list") return base+"videoseries?list="+encodeURIComponent(v.list)+"&autoplay=1";
+    var q="autoplay=1&rel=0";
+    if(v.start) q+="&start="+v.start;
+    if(v.list) q+="&list="+encodeURIComponent(v.list);
+    return base+v.id+"?"+q;
+  }
+  function watchUrl(v){
+    return v.type==="list" ? "https://www.youtube.com/playlist?list="+encodeURIComponent(v.list)
+                           : "https://www.youtube.com/watch?v="+v.id;
+  }
+
+  function play(raw){
+    var v=parse(raw);
+    if(!v){ msg.textContent="YouTubeのリンクとして読み取れませんでした。リンクをもう一度確認してください。"; return; }
+    msg.textContent="";
+    var f=document.createElement("iframe");
+    f.src=embedUrl(v);
+    f.title="YouTube動画プレーヤー";
+    f.allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen";
+    f.allowFullscreen=true;
+    f.referrerPolicy="strict-origin-when-cross-origin";
+    stage.innerHTML=""; stage.appendChild(f);
+    openLink.href=watchUrl(v); tools.hidden=false;
+    var key=v.type==="list"?"list:"+v.list:v.id;
+    hist=hist.filter(function(h){return h.key!==key});
+    hist.unshift({key:key,url:watchUrl(v),at:Date.now()});
+    save(); render();
+  }
+
+  function render(){
+    histEl.innerHTML="";
+    if(!hist.length){ var li=document.createElement("li"); li.style.color="var(--sub)"; li.textContent="再生した動画がここに残ります。"; histEl.appendChild(li); return; }
+    hist.forEach(function(h){
+      var li=document.createElement("li");
+      var b=document.createElement("button"); b.type="button"; b.className="item"; b.textContent=h.url;
+      b.onclick=function(){ input.value=h.url; play(h.url); };
+      var d=document.createElement("button"); d.type="button"; d.className="del"; d.textContent="削除"; d.setAttribute("aria-label","履歴から削除");
+      d.onclick=function(){ hist=hist.filter(function(x){return x.key!==h.key}); save(); render(); };
+      li.appendChild(b); li.appendChild(d); histEl.appendChild(li);
+    });
+  }
+
+  $("play").onclick=function(){ play(input.value); };
+  input.addEventListener("keydown",function(e){ if(e.key==="Enter") play(input.value); });
+  input.addEventListener("paste",function(){ setTimeout(function(){ if(parse(input.value)) play(input.value); },0); });
+  $("paste").onclick=function(){
+    if(navigator.clipboard && navigator.clipboard.readText){
+      navigator.clipboard.readText().then(function(t){ input.value=t; play(t); }).catch(function(){ msg.textContent="クリップボードを読めませんでした。入力欄に直接貼り付けてください。"; input.focus(); });
+    } else { msg.textContent="入力欄に直接貼り付けてください。"; input.focus(); }
+  };
+
+  load(); render();
+})();
+</script>
+</body>
+</html>
